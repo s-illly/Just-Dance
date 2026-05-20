@@ -1,5 +1,6 @@
 .vscode
-poses
 src/__pycache__
+src/videos
+src/tests
+src/poses
 venv
-videos
