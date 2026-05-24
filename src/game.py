@@ -9,7 +9,10 @@ import subprocess
 import tempfile 
 from extractor import extract_keypoints
 from scorer import scorer
-from hud import draw_countdown, draw_grade_banner, draw_score_bar
+from hud import draw_countdown, draw_grade_banner, draw_score_bar, draw_combo
+from end_screen import run_end_screen
+from start_screen import run_start_screen, draw_start_screen
+from combo import ComboTracker
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -35,6 +38,7 @@ def run_game(video_path, poses_path):
     """
 
     # assets 
+    song_name = os.path.splitext(os.path.basename(video_path))[0].replace("_", " ").title()
     ref_poses = np.load(poses_path)
     meta = np.load(poses_path.replace(".npy", "_meta.npy"))
     fps, total_frames = meta
@@ -54,102 +58,121 @@ def run_game(video_path, poses_path):
         print("ERROR: could not open webcam")
         return
     
-    # game state 
-    total_score = 0
-    frame_idx = 0
-    grade_alpha = 0.0
-    current_grade = "MISS"
+    # game loop
+    play_again = True
+    while play_again:
+        # start screen
+        if not run_start_screen(player_cap, song_name):
+            break
 
-    # countdown
-    # for i in range(COUNTDOWN_SEC, -1, -1):
-    #     ret, player_frame = player_cap.read()
-    #     if not ret:
-    #         break
-    #     player_frame = cv2.flip(player_frame, 1)
-    #     player_frame = cv2.resize(player_frame, (PANEL_W * 2, PANEL_H))
-    #     player_frame = draw_countdown(player_frame, i)
-    #     cv2.imshow("Just Dance", player_frame)
-    #     cv2.waitKey(1000)
+        # game state 
+        total_score = 0
+        frame_idx = 0
+        grade_alpha = 0.0
+        current_grade = "MISS"
+        combo = ComboTracker()
 
-    # start audio
-    pygame.mixer.music.play()
-    game_start = time.time()
+        ref_cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # rewind video 
 
-    # main loop 
-    with mp_pose.Pose(
-        model_complexity = 0, #lighter model 
-        smooth_landmarks = True,
-        min_detection_confidence = 0.5,
-        min_tracking_confidence = 0.5
-    ) as pose:
-        while True:
-            loop_start = time.time()
+        # countdown
+        # for i in range(COUNTDOWN_SEC, -1, -1):
+        #     ret, player_frame = player_cap.read()
+        #     if not ret:
+        #         break
+        #     player_frame = cv2.flip(player_frame, 1)
+        #     player_frame = cv2.resize(player_frame, (PANEL_W * 2, PANEL_H))
+        #     player_frame = draw_countdown(player_frame, i)
+        #     cv2.imshow("Just Dance", player_frame)
+        #     cv2.waitKey(1000)
 
-            # read reference video frame 
-            ret_ref, ref_frame = ref_cap.read()
-            if not ret_ref or frame_idx >= int(total_frames):
-                break
-            ref_frame = cv2.resize(ref_frame, (PANEL_W, PANEL_H))
+        # start audio
+        pygame.mixer.music.play()
+        # game_start = time.time()
 
-            # read player video frame
-            ret_player, player_frame = player_cap.read()
-            if not ret_player:
-                break
-            player_frame = cv2.flip(player_frame, 1)
-            player_frame = cv2.resize(player_frame, (PANEL_W, PANEL_H))
+        # main loop 
+        with mp_pose.Pose(
+            model_complexity = 0, #lighter model 
+            smooth_landmarks = True,
+            min_detection_confidence = 0.5,
+            min_tracking_confidence = 0.5
+        ) as pose:
+            while True:
+                #loop_start = time.time()
 
-            # send to mediapipe 
-            detect_frame = cv2.resize(player_frame, (320, 240))
-            rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(rgb)
+                # read reference video frame 
+                ret_ref, ref_frame = ref_cap.read()
+                if not ret_ref or frame_idx >= int(total_frames):
+                    break
+                ref_frame = cv2.resize(ref_frame, (PANEL_W, PANEL_H))
 
-            # draw skeleton over player
-            if results.pose_landmarks:
-                mp_drawing.draw_landmarks(
-                    player_frame,
-                    results.pose_landmarks,
-                    mp_pose.POSE_CONNECTIONS, # connecting joints
-                )
+                # read player video frame
+                ret_player, player_frame = player_cap.read()
+                if not ret_player:
+                    break
+                player_frame = cv2.flip(player_frame, 1)
+                player_frame = cv2.resize(player_frame, (PANEL_W, PANEL_H))
 
-            # score 
-            score_idx = max(0, frame_idx - LAG_FRAMES)
-            ref_kp = ref_poses[score_idx]
-            player_kp = extract_keypoints(results)
-            frame_score, grade = scorer(ref_kp, player_kp)
-            total_score += frame_score * 10 
+                # send to mediapipe 
+                detect_frame = cv2.resize(player_frame, (320, 240))
+                rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(rgb)
 
-            # grade banner 
-            if grade in ("PERFECT", "GOOD"):
-                grade_alpha = 1.0
-                current_grade = grade 
-            grade_alpha = max(0.0, grade_alpha - 0.033)
+                # draw skeleton over player
+                if results.pose_landmarks:
+                    mp_drawing.draw_landmarks(
+                        player_frame,
+                        results.pose_landmarks,
+                        mp_pose.POSE_CONNECTIONS, # connecting joints
+                    )
 
-            # draw hud 
-            ref_panel = draw_score_bar(ref_frame, frame_score, current_grade, total_score)
-            player_panel = draw_grade_banner(player_frame, current_grade, grade_alpha)
+                # score 
+                score_idx = max(0, frame_idx - LAG_FRAMES)
+                ref_kp = ref_poses[score_idx]
+                player_kp = extract_keypoints(results)
+                frame_score, grade = scorer(ref_kp, player_kp)
+                
+                
+                multiplier = combo.update(grade)
+                total_score += frame_score * multiplier
 
-            # composite 
-            combined = np.hstack([ref_panel, player_panel])
+                # grade banner 
+                if grade in ("PERFECT", "GOOD"):
+                    grade_alpha = 1.0
+                    current_grade = grade 
+                grade_alpha = max(0.0, grade_alpha - 0.033)
 
-            # show
-            cv2.imshow("Just Dance", combined)
+                # draw hud 
+                ref_panel = draw_score_bar(ref_frame, frame_score, current_grade, total_score)
+                player_panel = draw_grade_banner(player_frame, current_grade, grade_alpha)
+                player_panel = draw_combo(player_panel, multiplier, combo.combo)
 
-            # timing 
-            audio_sec = pygame.mixer.music.get_pos() / 1000.0
-            target_frame = int(audio_sec * fps)
+                # composite 
+                combined = np.hstack([ref_panel, player_panel])
 
-            # skip frames if lagging behind 
-            if target_frame > frame_idx + 1:
-                ref_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-                frame_idx = target_frame 
-            else: 
-                frame_idx += 1
+                # show
+                cv2.imshow("Just Dance", combined)
 
-            # elapsed_ms = (time.time() - loop_start) * 1000
-            # wait_ms = max(1, frame_delay - int(elapsed_ms))
-            key = cv2.waitKey(1)
-            if key & 0xFF == ord('q'):
-                break
+                # timing 
+                audio_sec = pygame.mixer.music.get_pos() / 1000.0
+                target_frame = int(audio_sec * fps)
+
+                # skip frames if lagging behind 
+                if target_frame > frame_idx + 1:
+                    ref_cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    frame_idx = target_frame 
+                else: 
+                    frame_idx += 1
+
+                # elapsed_ms = (time.time() - loop_start) * 1000
+                # wait_ms = max(1, frame_delay - int(elapsed_ms))
+                key = cv2.waitKey(1)
+                if key & 0xFF == ord('q'):
+                    break
+            
+        # end screen 
+        pygame.mixer.music.stop()
+        if play_again:
+            play_again = run_end_screen(player_cap, total_score, combo.best)
         
     ref_cap.release()
     player_cap.release()
@@ -159,4 +182,4 @@ def run_game(video_path, poses_path):
 
     print(f"\nGame over! Final score: {int(total_score)}")
     return int(total_score)
-        
+            

@@ -75,3 +75,30 @@ def draw_countdown(frame, seconds_left):
                 cv2.FONT_HERSHEY_SIMPLEX, 4.0, colour, 6)
     return frame
 
+def draw_combo(frame, multiplier, combo_count):
+    """ Draw combo mult in the bottom left corner """
+    if multiplier <= 1:
+        return frame
+    
+    h, w = frame.shape[:2]
+    colours = {
+        2: (147, 220, 255),    # yellow
+        4: (80,  147, 255),    # orange
+        8: (80,  80,  220),    # red — on fire
+    }
+    colour = colours.get(multiplier, (255, 255, 255))
+    
+    # Multiplier badge
+    badge = f"x{multiplier}"
+    cv2.putText(frame, badge, (20, h - 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.6, colour, 3)
+
+    # Combo count underneath
+    cv2.putText(frame, f"{combo_count} combo", (20, h - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 1)
+
+    # Pulsing ring when on fire (x8)
+    if multiplier == 8:
+        cv2.circle(frame, (42, h - 58), 38, colour, 2)
+    
+    return frame 
