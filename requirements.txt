@@ -1,0 +1,5 @@
+mediapipe==0.10.35
+numpy==2.4.6
+opencv-contrib-python==4.13.0.92
+pygame==2.6.1
+yt-dlp==2026.3.17

@@ -7,21 +7,50 @@ import os
 import sys 
 import subprocess
 import tempfile 
-from extractor import extract_keypoints
+from mediapipe.tasks.python.vision import PoseLandmarker, PoseLandmarkerOptions
+from mediapipe.tasks.python import BaseOptions
+from mediapipe.tasks.python.vision.core.vision_task_running_mode import VisionTaskRunningMode as RunningMode
+from extractor import landmarks_to_keypoints, ensure_model, _hip_x
 from scorer import scorer
-from hud import draw_countdown, draw_grade_banner, draw_score_bar, draw_combo
+from hud import draw_grade_banner, draw_player_scores
 from end_screen import run_end_screen
 from start_screen import run_start_screen, draw_start_screen
 from combo import ComboTracker
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils 
-
 PANEL_W, PANEL_H = 640, 480
+SCORE_STRIP_H = 120
 LAG_FRAMES = 3
-COUNTDOWN_SEC = 3
+
+# one colour per player slot (BGR)
+PLAYER_COLOURS = [
+    (50, 220, 50),   # P1: green
+    (50, 50, 220),   # P2: red
+    (220, 200, 0),   # P3: cyan
+    (0, 165, 255),   # P4: orange
+]
+
+POSE_CONNECTIONS = [
+    # (0,1),(1,2),(2,3),(3,7),(0,4),(4,5),(5,6),(6,8), # face
+    # (9,10), # mouth
+    (11,12), # shoulders
+    (11,13),(13,15),(15,17),(15,19),(15,21),(17,19), # left arm & hand
+    (12,14),(14,16),(16,18),(16,20),(16,22),(18,20), # right arm & hand
+    (11,23),(12,24),(23,24), # torso
+    (23,25),(25,27),(27,29),(27,31),(29,31), # left leg
+    (24,26),(26,28),(28,30),(28,32),(30,32), # right leg
+]
+
+def draw_skeleton(frame, landmarks, colour):
+    h, w = frame.shape[:2]
+    pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+    for start_idx, end_idx in POSE_CONNECTIONS:
+        if start_idx < len(pts) and end_idx < len(pts):
+            cv2.line(frame, pts[start_idx], pts[end_idx], colour, 2)
+    for pt in pts:
+        cv2.circle(frame, pt, 4, colour, -1)
+
 
 def extract_audio(video_path):
     tmp = tempfile.mktemp(suffix=".wav")
@@ -31,19 +60,23 @@ def extract_audio(video_path):
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return tmp 
 
-def run_game(video_path, poses_path, title):
+def run_game(video_path, poses_path, title, num_players = 1, model_path=None):
     """
     video_path: path to dance video (.mp4)
-    poses_path: path to extracted keypoints (.npy)
+    poses_path: path to extracted keypoints (.npy) shape: (frames, num_dancers, 33, 4)
+    num_players: how many people are playing (1-4)
     """
+
+    model_path = ensure_model(model_path)
 
     # assets 
     song_name = title
     ref_poses = np.load(poses_path)
     meta = np.load(poses_path.replace(".npy", "_meta.npy"))
     fps, total_frames = meta
-    frame_delay = max(1, int(1000/fps))
-    print(f"Loaded {int(total_frames)} reference frames @ {fps:.1f}fps")
+    num_ref_dancers = ref_poses.shape[1]
+    print(f"Loaded {int(total_frames)} frames @ {fps:.1f}fps | " 
+          f"{num_ref_dancers} reference dancer(s) | {num_players} player(s)")
 
     # audio 
     pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -59,6 +92,15 @@ def run_game(video_path, poses_path, title):
         return
     
     # game loop
+    options = PoseLandmarkerOptions(
+        base_options = BaseOptions(model_asset_path=model_path),
+        running_mode = RunningMode.VIDEO,
+        num_poses = num_players,
+        min_pose_detection_confidence = 0.5,
+        min_pose_presence_confidence = 0.5,
+        min_tracking_confidence = 0.5,
+    )
+
     play_again = True
     while play_again:
         # start screen
@@ -66,13 +108,10 @@ def run_game(video_path, poses_path, title):
             break
 
         # game state 
-        total_score = 0
-        frame_idx = 0
-        grade_alpha = 0.0
-        current_grade = "MISS"
-        combo = ComboTracker()
-
-        ref_cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # rewind video 
+        scores = [0.0] * num_players
+        combos = [ComboTracker() for _ in range(num_players)]
+        grade_alphas = [0.0] * num_players
+        current_grades = ["MISS"] * num_players
 
         # countdown
         # for i in range(COUNTDOWN_SEC, -1, -1):
@@ -86,16 +125,13 @@ def run_game(video_path, poses_path, title):
         #     cv2.waitKey(1000)
 
         # start audio
+        frame_idx = 0
+        ref_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         pygame.mixer.music.play()
-        # game_start = time.time()
+        cam_timestamp_ms = 0
 
         # main loop 
-        with mp_pose.Pose(
-            model_complexity = 0, #lighter model 
-            smooth_landmarks = True,
-            min_detection_confidence = 0.5,
-            min_tracking_confidence = 0.5
-        ) as pose:
+        with PoseLandmarker.create_from_options(options) as landmarker:
             while True:
                 #loop_start = time.time()
 
@@ -112,45 +148,52 @@ def run_game(video_path, poses_path, title):
                 player_frame = cv2.flip(player_frame, 1)
                 player_frame = cv2.resize(player_frame, (PANEL_W, PANEL_H))
 
-                # send to mediapipe 
+                # send to mediapipe , detect all players
                 detect_frame = cv2.resize(player_frame, (320, 240))
                 rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-                results = pose.process(rgb)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = landmarker.detect_for_video(mp_image, cam_timestamp_ms)
+                cam_timestamp_ms += 1
 
                 # draw skeleton over player
-                if results.pose_landmarks:
-                    mp_drawing.draw_landmarks(
-                        player_frame,
-                        results.pose_landmarks,
-                        mp_pose.POSE_CONNECTIONS, # connecting joints
-                    )
+                detected = sorted(result.pose_landmarks or [], key=_hip_x)
 
                 # score 
                 score_idx = max(0, frame_idx - LAG_FRAMES)
-                ref_kp = ref_poses[score_idx]
-                player_kp = extract_keypoints(results)
-                frame_score, grade = scorer(ref_kp, player_kp)
-                print(f"frame={frame_idx:4d} score={frame_score:.3f} grade={grade}")
-                
-                
-                multiplier = combo.update(grade)
-                total_score += frame_score * multiplier
 
-                # grade banner 
-                if grade in ("PERFECT", "GOOD"):
-                    grade_alpha = 1.0
-                    current_grade = grade 
-                grade_alpha = max(0.0, grade_alpha - 0.033)
+                # draw players, score against reference dancer
+                for i, landmarks in enumerate(detected[:num_players]):
+                    draw_skeleton(player_frame, landmarks, PLAYER_COLOURS[i % len(PLAYER_COLOURS)])
 
-                # draw hud 
-                ref_panel = draw_score_bar(ref_frame, frame_score, current_grade, total_score)
-                player_panel = draw_grade_banner(player_frame, current_grade, grade_alpha)
-                player_panel = draw_combo(player_panel, multiplier, combo.combo)
+                    # draw hud 
+                    player_kp = landmarks_to_keypoints(landmarks)
+                    ref_dancer_idx = i % num_ref_dancers
 
-                # composite 
-                combined = np.hstack([ref_panel, player_panel])
+                    ref_kp = ref_poses[score_idx, ref_dancer_idx]
+                    frame_score, grade = scorer(ref_kp, player_kp)
 
-                # show
+                    # composite 
+                    multiplier = combos[i].update(grade)
+                    scores[i] += frame_score * multiplier 
+                    current_grades[i] = grade 
+                    if grade in ("PERFECT", "GOOD"):
+                        grade_alphas[i] = 1.0
+                    grade_alphas[i] = max(0.0, grade_alphas[i] - 0.033)
+
+
+                # score strip 
+                score_strip = draw_player_scores(
+                    scores = scores,
+                    grades = current_grades, 
+                    multipliers = [c.multiplier for c in combos],
+                    combo_counts = [c.combo for c in combos],
+                    num_players = num_players,
+                    active_count = len(detected[:num_players]),
+                    width = PANEL_W * 2,
+                    height = SCORE_STRIP_H
+                )
+                top_row = np.hstack([ref_frame, player_frame])
+                combined = np.vstack([top_row, score_strip])
                 cv2.imshow("Just Dance", combined)
 
                 # timing 
@@ -173,7 +216,7 @@ def run_game(video_path, poses_path, title):
         # end screen 
         pygame.mixer.music.stop()
         if play_again:
-            play_again = run_end_screen(player_cap, total_score, combo.best)
+            play_again = run_end_screen(player_cap, scores, [c.best for c in combos])
         
     ref_cap.release()
     player_cap.release()
@@ -181,6 +224,6 @@ def run_game(video_path, poses_path, title):
     pygame.mixer.music.stop()
     os.remove(tmp_audio)
 
-    print(f"\nGame over! Final score: {int(total_score)}")
-    return int(total_score)
+    print(f"\nGame over! Final score: {[int(s) for s in scores]}")
+    return [int(s) for s in scores]
             
