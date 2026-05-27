@@ -2,16 +2,16 @@ import cv2
 
 def run_end_screen(player_cap, total_score, best_combo):
     """ Show final score and wait for q or space"""
-    if total_score >= 8000:
+    if total_score >= 4000:
         letter = "S"
         colour = (147, 255, 147) # green
-    elif total_score >= 6000:
+    elif total_score >= 3000:
         letter = "A"
         colour = (147, 220, 255)    # yellow
-    elif total_score >= 4000:
+    elif total_score >= 2000:
         letter = "B"
         colour = (147, 147, 255)    # orange
-    elif total_score >= 2000:
+    elif total_score >= 1000:
         letter = "C"
         colour = (80, 80, 220)      # red
     else:

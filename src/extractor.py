@@ -64,18 +64,18 @@ def extract_video_poses(video_path, output_dir = "poses", show_preview=True):
                 print(f"  [{pct:5.1f}%]  frame {frame_idx}/{total}", end="\r")
 
             # Small preview window
-            if show_preview:
-                if results.pose_landmarks:
-                    mp.solutions.drawing_utils.draw_landmarks(
-                        frame,
-                        results.pose_landmarks,
-                        mp_pose.POSE_CONNECTIONS
-                    )
-                small = cv2.resize(frame, (480, 270))
-                cv2.imshow("Extracting poses", small)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("\nStopped early by user")
-                    break
+            # if show_preview:
+            #     if results.pose_landmarks:
+            #         mp.solutions.drawing_utils.draw_landmarks(
+            #             frame,
+            #             results.pose_landmarks,
+            #             mp_pose.POSE_CONNECTIONS
+            #         )
+            #     small = cv2.resize(frame, (480, 270))
+            #     cv2.imshow("Extracting poses", small)
+            #     if cv2.waitKey(1) & 0xFF == ord('q'):
+            #         print("\nStopped early by user")
+            #         break
             frame_idx += 1
 
     cap.release()

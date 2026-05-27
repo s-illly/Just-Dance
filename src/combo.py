@@ -25,6 +25,7 @@ class ComboTracker:
             self.best = max(self.best, self.combo)
         elif grade == ("MISS"):
             self.combo = 0
+            self.multiplier = 1
 
         for threshold, mult in self.TIERS:
             if self.combo >= threshold:

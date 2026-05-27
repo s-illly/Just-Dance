@@ -31,14 +31,14 @@ def extract_audio(video_path):
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return tmp 
 
-def run_game(video_path, poses_path):
+def run_game(video_path, poses_path, title):
     """
     video_path: path to dance video (.mp4)
     poses_path: path to extracted keypoints (.npy)
     """
 
     # assets 
-    song_name = os.path.splitext(os.path.basename(video_path))[0].replace("_", " ").title()
+    song_name = title
     ref_poses = np.load(poses_path)
     meta = np.load(poses_path.replace(".npy", "_meta.npy"))
     fps, total_frames = meta
@@ -130,6 +130,7 @@ def run_game(video_path, poses_path):
                 ref_kp = ref_poses[score_idx]
                 player_kp = extract_keypoints(results)
                 frame_score, grade = scorer(ref_kp, player_kp)
+                print(f"frame={frame_idx:4d} score={frame_score:.3f} grade={grade}")
                 
                 
                 multiplier = combo.update(grade)

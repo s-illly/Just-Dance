@@ -2,16 +2,21 @@ import numpy as np
 from normaliser import normalise_pose
 
 SCORING_JOINTS = [
-    11, 12, # shoulders 
-    13, 14, # elbows 
-    15, 16, # wrists 
-    23, 24, # hips 
-    25, 26, # knees 
+    # parent, child, weight, label
+    (11, 13, 2.0, "left upper arm"),                                                                          
+    (12, 14, 2.0, "right upper arm"),                                                                         
+    (13, 15, 3.0, "left lower arm"),                                                                          
+    (14, 16, 3.0, "right lower arm"),                                                                         
+    (23, 25, 1.0, "left thigh"),                                                                              
+    (24, 26, 1.0, "right thigh"),                                                                             
+    (25, 27, 0.8, "left shin"),                                                                               
+    (26, 28, 0.8, "right shin"),
 ]
 
-GRADE_PERFECT = 0.92 
-GRADE_GOOD = 0.75
-GRADE_OK = 0.55
+
+GRADE_PERFECT = 0.95
+GRADE_GOOD = 0.88
+GRADE_OK = 0.75
 
 def cosine_similarity(a, b):
     """
@@ -44,28 +49,30 @@ def scorer(ref_keypoints, player_keypoints):
     if np.all(ref_norm == 0) or np.all(player_norm == 0):
         return 0.0, "MISS"
     
-    joint_scores = []
-    for joint_idx in SCORING_JOINTS:
-        # x,y,z
-        ref_vec = ref_norm[joint_idx]
-        player_vec = player_norm[joint_idx]
+    weighted_sum = 0.0
+    weight_total = 0.0
 
-        ref_visible = ref_keypoints[joint_idx, 3]
-        player_visible = player_keypoints[joint_idx, 3]
-        if ref_visible < 0.5 or player_visible < 0.5:
-            continue # skip joint 
+    for parent, child, weight, _label in SCORING_JOINTS:
+        ref_vis = min(ref_keypoints[parent, 3], ref_keypoints[child, 3])
+        player_vis = min(player_keypoints[parent, 3], player_keypoints[child, 3])
+        if ref_vis < 0.5 or player_vis < 0.5:
+            continue 
 
-        sim = cosine_similarity(ref_vec, player_vec)
+        ref_bone = ref_norm[child] - ref_norm[parent]
+        player_bone = player_norm[child] - player_norm[parent]
+
+        sim = cosine_similarity(ref_bone, player_bone)
         score = (sim + 1) / 2
-        joint_scores.append(score)
+        weighted_sum += score * weight 
+        weight_total += weight 
 
-    if not joint_scores:
+    if weight_total == 0:
         return 0.0, "MISS"
-    final_score = float(np.mean(joint_scores))
+    final_score = weighted_sum / weight_total 
     if final_score >= GRADE_PERFECT:
         return final_score, "PERFECT"
     elif final_score >= GRADE_GOOD:
         return final_score, "GOOD"
     elif final_score >= GRADE_OK:
         return final_score, "OK"   
-    return final_score, "MISS"
+    return 0.0, "MISS"

@@ -1,19 +1,20 @@
 import sys 
-import os 
+import os, tempfile 
+import shutil 
 
 sys.path.insert(0, "src")
 from game import run_game
+from video import download_video
+from extractor import extract_video_poses
 
-VIDEO = "src/videos/test_dance.mp4"
-POSES = "src/poses/test_dance.npy"
+url = input("Paste a youtube url: ").strip()
+VIDEO, info = download_video(url)
+print(f"\nSaved to: {VIDEO}")
 
-if not os.path.exists(VIDEO):
-    print(f"Video not found: {VIDEO}")
-    print("Run: yt-dlp -o videos/test_dance.mp4 <URL>")
-    sys.exit(1)
-if not os.path.exists(POSES):
-    print(f"Poses not found: {POSES}")
-    print("Run: python src/extractor.py videos/test_dance.mp4")
-    sys.exit(1)
-
-run_game(VIDEO, POSES)
+try:
+    tmp_dir = tempfile.mkdtemp()
+    POSES = extract_video_poses(VIDEO, output_dir = tmp_dir)
+    run_game(VIDEO, POSES, info['title'])
+finally:
+    os.remove(VIDEO)
+    shutil.rmtree(tmp_dir)
